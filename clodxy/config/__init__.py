@@ -72,8 +72,7 @@ def load_config():
   if result.default.backend not in result.backends:
     available = ", ".join(result.backends.keys())
     raise ValueError(
-      f"Default backend '{result.default.backend}' not found. "
-      f"Available backends: {available}"
+      f"Default backend '{result.default.backend}' not found. Available backends: {available}"
     )
 
   backend = result.backends[result.default.backend]

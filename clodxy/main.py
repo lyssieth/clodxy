@@ -37,12 +37,16 @@ backends = config.backends
 chosen = config.default
 
 if chosen.backend not in backends:
-  raise KeyError(f"Backend '{chosen.backend}' not found in config. Available: {list(backends.keys())}")
+  raise KeyError(
+    f"Backend '{chosen.backend}' not found in config. Available: {list(backends.keys())}"
+  )
 
 backend = backends[chosen.backend]
 
 if chosen.model not in backend.models:
-  raise KeyError(f"Model '{chosen.model}' not found in backend '{chosen.backend}'. Available: {list(backend.models.keys())}")
+  raise KeyError(
+    f"Model '{chosen.model}' not found in backend '{chosen.backend}'. Available: {list(backend.models.keys())}"
+  )
 
 api_base = backend.api_base
 api_key = backend.api_key or "not-needed"
