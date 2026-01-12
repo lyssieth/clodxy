@@ -16,18 +16,10 @@ Supports the bare minimum necessary (messages, streaming, tools, vision).
 
 ## Installation
 
-Clone and run with uv:
+No installation needed - run directly via uvx:
 
 ```bash
-git clone https://github.com/lyssieth/clodxy.git
-cd clodxy
-./clodxy.sh
-```
-
-Or install via pip/uv:
-
-```bash
-pip install clodxy
+uvx clodxy
 ```
 
 ## Configuration
