@@ -19,6 +19,7 @@ class Backend:
   models: dict[str, Model]
   api_key: str | None = None
   # Skip the last assistant message in Anth -> OpenAI conversion.
+  # Only applies when BOTH this is true AND the model has reasoning=true.
   # Required for llama.cpp and other servers with thinking/reasoning models
   # that don't accept assistant prefills as the final message.
   skip_last_assistant_message: bool = False

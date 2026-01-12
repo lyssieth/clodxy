@@ -56,7 +56,7 @@ model = backend.models[chosen.model]
 
 # Create translation options from backend configuration
 translation_options = TranslationOptions(
-  skip_last_assistant_message=backend.skip_last_assistant_message,
+  skip_last_assistant_message=backend.skip_last_assistant_message and model.reasoning,
   supports_vision=model.vision,
 )
 

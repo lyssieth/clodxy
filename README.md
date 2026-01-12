@@ -34,6 +34,7 @@ See `config.example.json` for reference:
     "openai": {
       "api_base": "https://api.openai.com/v1",
       "api_key": "sk-your-api-key-here",
+      "skip_last_assistant_message": false,
       "models": {
         "gpt-4o": {
           "context_size": 128000,
@@ -49,6 +50,18 @@ See `config.example.json` for reference:
   }
 }
 ```
+
+### Configuration Options
+
+#### Backend fields
+- `api_base` - The base URL of the OpenAI-compatible API
+- `api_key` - API key for the backend (optional, defaults to `"not-needed"`)
+- `skip_last_assistant_message` - Skip the last assistant message in the Anthropic→OpenAI conversion. **Only applies when both this is true AND the model has `reasoning: true`.** Enable this for backends like llama.cpp that don't accept assistant prefills as the final message.
+
+#### Model fields
+- `context_size` - Maximum context window size in tokens
+- `reasoning` - Whether this is a reasoning/thinking model (e.g., o1, o3-mini, deepseek-reasoner)
+- `vision` - Whether this model supports vision/images
 
 ## Usage
 

@@ -24,12 +24,8 @@ UVICORN_LOG_PATH = LOG_DIR / "uvicorn.log"
 APP_LOG_PATH = LOG_DIR / "clodxy.log"
 
 
-def _make_parser(add_help: bool = False) -> argparse.ArgumentParser:
+def _make_parser() -> argparse.ArgumentParser:
   """Create the argument parser.
-
-  Args:
-    add_help: Whether to add automatic -h/--help (disabled by default
-              to support '--' passthrough, but enabled for help display).
 
   Returns:
     Configured ArgumentParser instance.
@@ -84,7 +80,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   Arguments before '--' are parsed by clodxy.
   Arguments after '--' are passed directly to claude.
   """
-  parser = _make_parser(add_help=False)
+  parser = _make_parser()
 
   if argv is None:
     argv = sys.argv[1:]
@@ -108,7 +104,7 @@ def main():
   args = parse_args()
 
   if args.help:
-    _make_parser(add_help=True).print_help()
+    _make_parser().print_help()
     print("\nPassthrough:")
     print("  Use '--' to separate clodxy options from claude options.")
     print("  Example: clodxy --port 9000 -- --prompt 'write code'")
