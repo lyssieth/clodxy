@@ -1,6 +1,7 @@
 import json
-import time
 import logging
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from fastapi import FastAPI, Request, Response, HTTPException
@@ -59,6 +60,14 @@ translation_options = TranslationOptions(
   supports_vision=model.vision,
 )
 
+# Singleton HTTP client for backend connections
+_client = httpx.AsyncClient(
+  headers={
+    "Authorization": f"Bearer {api_key}",
+    "Content-Type": "application/json",
+  },
+  timeout=REQUEST_TIMEOUT,
+)
 
 app = FastAPI()
 
@@ -127,20 +136,14 @@ async def proxy_messages(request: Request) -> Response:
   else:
     # Non-streaming: simple request/response
     try:
-      async with httpx.AsyncClient() as client:
-        response = await client.post(
-          f"{api_base}/chat/completions",
-          json=openai_req,
-          headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-          },
-          timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        openai_resp = response.json()
-        anthropic_resp = openai_dict_to_anthropic_response(openai_resp)
-        return Response(anthropic_resp)
+      response = await _client.post(
+        f"{api_base}/chat/completions",
+        json=openai_req,
+      )
+      response.raise_for_status()
+      openai_resp = response.json()
+      anthropic_resp = openai_dict_to_anthropic_response(openai_resp)
+      return Response(anthropic_resp)
     except httpx.HTTPStatusError as e:
       logger.error(f"HTTP error from backend: {e.response.status_code} - {e.response.text}")
       raise HTTPException(
@@ -169,109 +172,106 @@ async def stream_openai_to_anthropic(openai_req: dict[str, Any]):
   Anthropic: event: content_block_delta\ndata: {...}\n\n
   """
 
-  async with httpx.AsyncClient() as client:
-    async with client.stream(
-      "POST",
-      f"{api_base}/chat/completions",
-      json=openai_req,
-      headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-      },
-      timeout=REQUEST_TIMEOUT,
-    ) as response:
-      response.raise_for_status()
+  async with _client.stream(
+    "POST",
+    f"{api_base}/chat/completions",
+    json=openai_req,
+  ) as response:
+    response.raise_for_status()
 
-      # Generate message ID
-      message_id = f"msg_{int(time.time() * 1000)}"
+    # Generate message ID (UUIDv4)
+    message_id = f"msg_{uuid.uuid4().hex}"
 
-      # Send message_start event
-      yield "event: message_start\n"
-      yield f"data: {json.dumps({'type': 'message_start', 'message': {'id': message_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': openai_req['model'], 'stop_reason': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
+    # Send message_start event
+    yield "event: message_start\n"
+    yield f"data: {json.dumps({'type': 'message_start', 'message': {'id': message_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': openai_req['model'], 'stop_reason': None, 'usage': {'input_tokens': 0, 'output_tokens': 0}}})}\n\n"
 
-      content_block_started = False
-      tool_calls_buffer: dict[int, dict[str, Any]] = {}
+    content_block_index = 0
+    content_block_started = False
+    tool_calls_buffer: dict[int, dict[str, Any]] = {}
 
-      async for line in response.aiter_lines():
-        if not line.strip() or not line.startswith("data: "):
-          continue
+    async for line in response.aiter_lines():
+      if not line.strip() or not line.startswith("data: "):
+        continue
 
-        data_str = line[6:].strip()
-        if data_str == "[DONE]":
-          break
+      data_str = line[6:].strip()
+      if data_str == "[DONE]":
+        break
 
-        try:
-          chunk = json.loads(data_str)
-        except json.JSONDecodeError:
-          logger.debug(f"Failed to parse JSON chunk: {data_str[:100]}")
-          continue
+      try:
+        chunk = json.loads(data_str)
+      except json.JSONDecodeError:
+        logger.debug(f"Failed to parse JSON chunk: {data_str[:100]}")
+        continue
 
-        choices = chunk.get("choices", [])
-        if not choices:
-          continue
+      choices = chunk.get("choices", [])
+      if not choices:
+        continue
 
-        delta = choices[0].get("delta", {})
-        finish_reason = choices[0].get("finish_reason")
+      delta = choices[0].get("delta", {})
+      finish_reason = choices[0].get("finish_reason")
 
-        # Handle text content
-        if "content" in delta and delta["content"]:
-          if not content_block_started:
-            yield "event: content_block_start\n"
-            yield f"data: {json.dumps({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-            content_block_started = True
+      # Handle text content
+      if "content" in delta and delta["content"]:
+        if not content_block_started:
+          yield "event: content_block_start\n"
+          yield f"data: {json.dumps({'type': 'content_block_start', 'index': content_block_index, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+          content_block_started = True
+
+        yield "event: content_block_delta\n"
+        yield f"data: {json.dumps({'type': 'content_block_delta', 'index': content_block_index, 'delta': {'type': 'text_delta', 'text': delta['content']}})}\n\n"
+
+      # Handle tool calls (buffered because they come in chunks)
+      if "tool_calls" in delta:
+        for tool_call in delta["tool_calls"]:
+          idx = tool_call["index"]
+          if idx not in tool_calls_buffer:
+            tool_calls_buffer[idx] = {
+              "id": tool_call.get("id", ""),
+              "name": tool_call.get("function", {}).get("name", ""),
+              "arguments": "",
+            }
+
+          if "function" in tool_call and "arguments" in tool_call["function"]:
+            tool_calls_buffer[idx]["arguments"] += tool_call["function"]["arguments"]
+
+      # Handle finish
+      if finish_reason:
+        # Close any open content blocks
+        if content_block_started:
+          yield "event: content_block_stop\n"
+          yield f"data: {json.dumps({'type': 'content_block_stop', 'index': content_block_index})}\n\n"
+          content_block_index += 1
+
+        # Emit completed tool calls
+        for _, tool_call in sorted(tool_calls_buffer.items()):
+          tool_use_id = tool_call["id"] or f"toolu_{uuid.uuid4().hex}"
+          yield "event: content_block_start\n"
+          yield f"data: {json.dumps({'type': 'content_block_start', 'index': content_block_index, 'content_block': {'type': 'tool_use', 'id': tool_use_id, 'name': tool_call['name'], 'input': {}}})}\n\n"
+
+          # Parse arguments JSON
+          try:
+            input_dict = json.loads(tool_call["arguments"])
+          except json.JSONDecodeError:
+            input_dict = {}
 
           yield "event: content_block_delta\n"
-          yield f"data: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': delta['content']}})}\n\n"
+          yield f"data: {json.dumps({'type': 'content_block_delta', 'index': content_block_index, 'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(input_dict)}})}\n\n"
 
-        # Handle tool calls (buffered because they come in chunks)
-        if "tool_calls" in delta:
-          for tool_call in delta["tool_calls"]:
-            idx = tool_call["index"]
-            if idx not in tool_calls_buffer:
-              tool_calls_buffer[idx] = {
-                "id": tool_call.get("id", ""),
-                "name": tool_call.get("function", {}).get("name", ""),
-                "arguments": "",
-              }
+          yield "event: content_block_stop\n"
+          yield f"data: {json.dumps({'type': 'content_block_stop', 'index': content_block_index})}\n\n"
+          content_block_index += 1
 
-            if "function" in tool_call and "arguments" in tool_call["function"]:
-              tool_calls_buffer[idx]["arguments"] += tool_call["function"]["arguments"]
+        # Send message_delta with stop reason
+        stop_reason_map = {
+          "stop": "end_turn",
+          "tool_calls": "tool_use",
+          "length": "max_tokens",
+        }
+        stop_reason = stop_reason_map.get(finish_reason, "end_turn")
 
-        # Handle finish
-        if finish_reason:
-          # Close any open content blocks
-          if content_block_started:
-            yield "event: content_block_stop\n"
-            yield f"data: {json.dumps({'type': 'content_block_stop', 'index': 0})}\n\n"
+        yield "event: message_delta\n"
+        yield f"data: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': 0}})}\n\n"
 
-          # Emit completed tool calls
-          for idx, tool_call in sorted(tool_calls_buffer.items()):
-            tool_use_id = tool_call["id"] or f"toolu_{int(time.time() * 1000)}_{idx}"
-            yield "event: content_block_start\n"
-            yield f"data: {json.dumps({'type': 'content_block_start', 'index': idx + 1, 'content_block': {'type': 'tool_use', 'id': tool_use_id, 'name': tool_call['name'], 'input': {}}})}\n\n"
-
-            # Parse arguments JSON
-            try:
-              input_dict = json.loads(tool_call["arguments"])
-            except json.JSONDecodeError:
-              input_dict = {}
-
-            yield "event: content_block_delta\n"
-            yield f"data: {json.dumps({'type': 'content_block_delta', 'index': idx + 1, 'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(input_dict)}})}\n\n"
-
-            yield "event: content_block_stop\n"
-            yield f"data: {json.dumps({'type': 'content_block_stop', 'index': idx + 1})}\n\n"
-
-          # Send message_delta with stop reason
-          stop_reason_map = {
-            "stop": "end_turn",
-            "tool_calls": "tool_use",
-            "length": "max_tokens",
-          }
-          stop_reason = stop_reason_map.get(finish_reason, "end_turn")
-
-          yield "event: message_delta\n"
-          yield f"data: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': 0}})}\n\n"
-
-          yield "event: message_stop\n"
-          yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
+        yield "event: message_stop\n"
+        yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
