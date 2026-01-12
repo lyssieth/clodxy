@@ -1,6 +1,22 @@
 import time
 import json
+from dataclasses import dataclass
 from typing import Any
+
+
+class VisionNotSupportedError(ValueError):
+  """Raised when images are sent to a model that doesn't support vision."""
+
+
+@dataclass
+class TranslationOptions:
+  """Options for Anthropic -> OpenAI request translation."""
+  skip_last_assistant_message: bool = False
+  # Convert tool_result blocks to proper OpenAI tool role messages instead of text in user messages
+  use_tool_role_for_responses: bool = False
+  # Whether the model supports vision (images). Error if images are present and this is False.
+  supports_vision: bool = True
+
 
 # OpenAI -> Anthropic finish reason mapping
 OPENAI_TO_ANTHROPIC_STOP_REASON = {
@@ -11,8 +27,30 @@ OPENAI_TO_ANTHROPIC_STOP_REASON = {
 }
 
 
-def anthropic_dict_to_openai_request(argument: dict[Any, Any]) -> dict[Any, Any]:
-  """Convert Anthropic Messages API request to OpenAI Chat Completions format."""
+def _check_for_images(content: list[dict[str, Any]]) -> bool:
+  """Check if content list contains any image blocks."""
+  return any(block.get("type") == "image" for block in content)
+
+
+def anthropic_dict_to_openai_request(
+  argument: dict[Any, Any],
+  options: TranslationOptions | None = None,
+) -> dict[Any, Any]:
+  """
+  Convert Anthropic Messages API request to OpenAI Chat Completions format.
+
+  Args:
+    argument: Anthropic request dictionary
+    options: Translation options for backend-specific behavior
+
+  Returns:
+    OpenAI-compatible request dictionary
+
+  Raises:
+    VisionNotSupportedError: If images are present but model doesn't support vision
+  """
+  if options is None:
+    options = TranslationOptions()
   messages = []
 
   # Handle system prompt - Anthropic has separate system field, OpenAI uses messages
@@ -24,17 +62,73 @@ def anthropic_dict_to_openai_request(argument: dict[Any, Any]) -> dict[Any, Any]
   all_msgs = argument.get("messages", [])
   for i, msg in enumerate(all_msgs):
     role = msg["role"]
-    content = msg["content"]
+    content = msg.get("content", "")
     is_last_message = (i == len(all_msgs) - 1)
 
     # Skip assistant messages that would be the last message (incompatible with thinking mode)
     # This can happen when Claude Code sends tool results without a follow-up user message
-    if is_last_message and role == "assistant":
+    if is_last_message and role == "assistant" and options.skip_last_assistant_message:
       continue
 
     if isinstance(content, str):
       messages.append({"role": role, "content": content})
     elif isinstance(content, list):
+      # Check for images if model doesn't support vision
+      if not options.supports_vision and _check_for_images(content):
+        raise VisionNotSupportedError(
+          "Model does not support vision (images), but image content was detected in the request. "
+          "Either use a model with vision support or remove images from the request."
+        )
+
+      # Check if this is a user message containing tool_results
+      # When use_tool_role_for_responses is enabled, convert to separate tool messages
+      if options.use_tool_role_for_responses and role == "user":
+        tool_results: list[dict[str, Any]] = []
+        non_tool_content: list[dict[str, Any]] = []
+
+        for block in content:
+          if block["type"] == "tool_result":
+            tool_results.append(block)
+          else:
+            non_tool_content.append(block)
+
+        # Add user message with non-tool content first
+        if non_tool_content:
+          openai_content: list[dict[str, Any]] = []
+          for block in non_tool_content:
+            if block["type"] == "text":
+              openai_content.append({"type": "text", "text": block["text"]})
+            elif block["type"] == "image":
+              source = block.get("source", {})
+              media_type = source.get("type", "image/jpeg")
+              data = source.get("data", "")
+              openai_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{data}"},
+              })
+          if openai_content:
+            messages.append({"role": role, "content": openai_content})
+
+        # Add tool response messages (OpenAI format: role: "tool")
+        for tool_result in tool_results:
+          tool_use_id = tool_result.get("tool_use_id", "")
+          result_content = tool_result.get("content", "")
+          if isinstance(result_content, list):
+            result_text = "".join(
+              b.get("text", "") if b.get("type") == "text" else str(b)
+              for b in result_content
+            )
+          else:
+            result_text = str(result_content)
+          messages.append({
+            "role": "tool",
+            "tool_call_id": tool_use_id,
+            "content": result_text,
+          })
+
+        # Skip the rest of the loop for this message
+        continue
+
       # Handle multimodal content (text + images + tools)
       openai_content: list[dict[str, Any]] = []
       tool_calls: list[dict[str, Any]] = []

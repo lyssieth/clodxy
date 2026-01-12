@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import sys
 from os import getenv
 
 from dacite import from_dict, DaciteError
@@ -19,6 +18,10 @@ class Backend:
   api_base: str
   models: dict[str, Model]
   api_key: str | None = None
+  # Skip the last assistant message in Anth -> OpenAI conversion.
+  # Required for llama.cpp and other servers with thinking/reasoning models
+  # that don't accept assistant prefills as the final message.
+  skip_last_assistant_message: bool = False
 
 
 @dataclass
@@ -87,5 +90,4 @@ def load_config():
 def get_selected_model_id() -> str:
   """Get the model ID for the currently selected default model."""
   config = load_config()
-  backend = config.backends[config.default.backend]
   return config.default.model

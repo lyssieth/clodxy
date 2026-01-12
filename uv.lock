@@ -57,13 +57,17 @@ wheels = [
 [[package]]
 name = "clodxy"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "dacite" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "ruff" },
     { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -71,9 +75,10 @@ requires-dist = [
     { name = "dacite", specifier = ">=1.9.2" },
     { name = "fastapi", specifier = ">=0.128.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "ruff", specifier = ">=0.14.11" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.11" },
     { name = "uvicorn", specifier = ">=0.40.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "colorama"

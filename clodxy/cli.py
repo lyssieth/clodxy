@@ -37,11 +37,11 @@ def _make_parser(add_help: bool = False) -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
     prog="clodxy",
     description="Start the clodxy proxy and launch Claude Code",
-    add_help=add_help,
+    add_help=False,  # Always false, we handle --help manually
   )
-
   parser.add_argument(
-    "--help", "-h",
+    "--help",
+    "-h",
     action="store_true",
     help="Show this help message and exit",
   )
@@ -112,7 +112,7 @@ def main():
     print("\nPassthrough:")
     print("  Use '--' to separate clodxy options from claude options.")
     print("  Example: clodxy --port 9000 -- --prompt 'write code'")
-    print(f"\nLogs:")
+    print("\nLogs:")
     print(f"  App:      {APP_LOG_PATH}")
     print(f"  Uvicorn:  {UVICORN_LOG_PATH}")
     sys.exit(0)
@@ -120,6 +120,7 @@ def main():
   if args.version:
     try:
       from clodxy import __version__
+
       print(f"clodxy {__version__}")
     except (ImportError, AttributeError):
       print("clodxy (version unknown)")
@@ -160,7 +161,7 @@ def main():
   # Start clodxy proxy in background
   print("| Starting clodxy proxy...")
   LOG_DIR.mkdir(parents=True, exist_ok=True)
-  uvicorn_log = open(UVICORN_LOG_PATH, "a")
+  uvicorn_log = open(UVICORN_LOG_PATH, "w")
   proxy = subprocess.Popen(
     ["uvicorn", "clodxy.main:app", "--host", args.host, "--port", args.port],
     stdout=uvicorn_log,

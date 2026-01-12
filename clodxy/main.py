@@ -4,11 +4,16 @@ import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 import httpx
 
 from .config import load_config
-from .translate import anthropic_dict_to_openai_request, openai_dict_to_anthropic_response
+from .translate import (
+  anthropic_dict_to_openai_request,
+  openai_dict_to_anthropic_response,
+  TranslationOptions,
+  VisionNotSupportedError,
+)
 
 
 # Request timeout (5 minutes for long responses)
@@ -43,6 +48,12 @@ api_base = backend.api_base
 api_key = backend.api_key or "not-needed"
 
 model = backend.models[chosen.model]
+
+# Create translation options from backend configuration
+translation_options = TranslationOptions(
+  skip_last_assistant_message=backend.skip_last_assistant_message,
+  supports_vision=model.vision,
+)
 
 
 app = FastAPI()
@@ -91,8 +102,15 @@ async def proxy_messages(request: Request) -> Response:
   # Get Anthropic format request
   anthropic_req = await request.json()
 
-  # Translate to OpenAI
-  openai_req = anthropic_dict_to_openai_request(anthropic_req)
+  try:
+    # Translate to OpenAI with backend options
+    openai_req = anthropic_dict_to_openai_request(anthropic_req, translation_options)
+  except VisionNotSupportedError as e:
+    logger.error(f"Vision not supported error: {e}")
+    raise HTTPException(
+      status_code=400,
+      detail=str(e),
+    ) from e
 
   # Check if streaming
   is_streaming = openai_req.get("stream", False)

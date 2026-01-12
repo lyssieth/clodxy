@@ -19,6 +19,9 @@ dev = [
 [project.scripts]
 clodxy = "clodxy.cli:main"
 
+[tool.uv]
+package = true
+
 [tool.ruff]
 line-length = 100
 indent-width = 2
