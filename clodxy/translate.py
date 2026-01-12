@@ -11,9 +11,10 @@ class VisionNotSupportedError(ValueError):
 @dataclass
 class TranslationOptions:
   """Options for Anthropic -> OpenAI request translation."""
+
   skip_last_assistant_message: bool = False
   # Convert tool_result blocks to proper OpenAI tool role messages instead of text in user messages
-  use_tool_role_for_responses: bool = False
+  use_tool_role_for_responses: bool = True
   # Whether the model supports vision (images). Error if images are present and this is False.
   supports_vision: bool = True
 
@@ -63,7 +64,7 @@ def anthropic_dict_to_openai_request(
   for i, msg in enumerate(all_msgs):
     role = msg["role"]
     content = msg.get("content", "")
-    is_last_message = (i == len(all_msgs) - 1)
+    is_last_message = i == len(all_msgs) - 1
 
     # Skip assistant messages that would be the last message (incompatible with thinking mode)
     # This can happen when Claude Code sends tool results without a follow-up user message
@@ -102,10 +103,12 @@ def anthropic_dict_to_openai_request(
               source = block.get("source", {})
               media_type = source.get("type", "image/jpeg")
               data = source.get("data", "")
-              openai_content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{media_type};base64,{data}"},
-              })
+              openai_content.append(
+                {
+                  "type": "image_url",
+                  "image_url": {"url": f"data:{media_type};base64,{data}"},
+                }
+              )
           if openai_content:
             messages.append({"role": role, "content": openai_content})
 
@@ -115,16 +118,17 @@ def anthropic_dict_to_openai_request(
           result_content = tool_result.get("content", "")
           if isinstance(result_content, list):
             result_text = "".join(
-              b.get("text", "") if b.get("type") == "text" else str(b)
-              for b in result_content
+              b.get("text", "") if b.get("type") == "text" else str(b) for b in result_content
             )
           else:
             result_text = str(result_content)
-          messages.append({
-            "role": "tool",
-            "tool_call_id": tool_use_id,
-            "content": result_text,
-          })
+          messages.append(
+            {
+              "role": "tool",
+              "tool_call_id": tool_use_id,
+              "content": result_text,
+            }
+          )
 
         # Skip the rest of the loop for this message
         continue
@@ -141,36 +145,41 @@ def anthropic_dict_to_openai_request(
           source = block.get("source", {})
           media_type = source.get("type", "image/jpeg")
           data = source.get("data", "")
-          openai_content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{media_type};base64,{data}"},
-          })
+          openai_content.append(
+            {
+              "type": "image_url",
+              "image_url": {"url": f"data:{media_type};base64,{data}"},
+            }
+          )
         elif block["type"] == "tool_result":
           # Convert tool result to user message with tool context
           tool_use_id = block.get("tool_use_id")
           result_content = block.get("content", "")
           if isinstance(result_content, list):
             result_text = "".join(
-              b.get("text", "") if b.get("type") == "text" else str(b)
-              for b in result_content
+              b.get("text", "") if b.get("type") == "text" else str(b) for b in result_content
             )
           else:
             result_text = str(result_content)
-          openai_content.append({
-            "type": "text",
-            "text": f"[Tool result for {tool_use_id}]: {result_text}",
-          })
+          openai_content.append(
+            {
+              "type": "text",
+              "text": f"[Tool result for {tool_use_id}]: {result_text}",
+            }
+          )
         elif block["type"] == "tool_use":
           # Convert tool_use to OpenAI's tool_calls format (for assistant messages)
           if role == "assistant":
-            tool_calls.append({
-              "id": block.get("id", f"call_{int(time.time() * 1000)}"),
-              "type": "function",
-              "function": {
-                "name": block.get("name", ""),
-                "arguments": json.dumps(block.get("input", {})),
-              },
-            })
+            tool_calls.append(
+              {
+                "id": block.get("id", f"call_{int(time.time() * 1000)}"),
+                "type": "function",
+                "function": {
+                  "name": block.get("name", ""),
+                  "arguments": json.dumps(block.get("input", {})),
+                },
+              }
+            )
 
       # Build message based on what we have
       if role == "assistant" and tool_calls:
@@ -206,14 +215,16 @@ def anthropic_dict_to_openai_request(
     openai_tools = []
     for tool in argument["tools"]:
       input_schema = tool.get("input_schema", {})
-      openai_tools.append({
-        "type": "function",
-        "function": {
-          "name": tool["name"],
-          "description": tool.get("description", ""),
-          "parameters": input_schema,
-        },
-      })
+      openai_tools.append(
+        {
+          "type": "function",
+          "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": input_schema,
+          },
+        }
+      )
     openai_req["tools"] = openai_tools
 
   # Map tool_choice
@@ -265,12 +276,14 @@ def openai_dict_to_anthropic_response(argument: dict[Any, Any]) -> dict[Any, Any
       except json.JSONDecodeError:
         arguments = {}
 
-      content.append({
-        "type": "tool_use",
-        "id": tool_call.get("id", f"toolu_{int(time.time() * 1000)}"),
-        "name": function.get("name", ""),
-        "input": arguments,
-      })
+      content.append(
+        {
+          "type": "tool_use",
+          "id": tool_call.get("id", f"toolu_{int(time.time() * 1000)}"),
+          "name": function.get("name", ""),
+          "input": arguments,
+        }
+      )
 
   # Map usage
   usage = argument.get("usage", {})
