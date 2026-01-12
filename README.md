@@ -4,6 +4,10 @@ A simple custom proxy for Claude Code -> Any (OpenAI-compatible) Backend.
 
 Supports the bare minimum necessary (messages, streaming, tools, vision).
 
+## Security Warning
+
+**NEVER expose this proxy to the public internet.** This proxy is designed for **local-only use** and has no authentication or authorization mechanisms. The moment you bind this to a public-facing interface, you're inviting anyone on the internet to use your API keys and backend credentials. That's a skill issue waiting to happen. Keep it local.
+
 ## Requirements
 
 - Python 3.12+
