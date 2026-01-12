@@ -1,0 +1,50 @@
+{
+  "backends": {
+    "openai": {
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "sk-your-api-key-here",
+      "models": {
+        "gpt-4o": {
+          "context_size": 128000,
+          "reasoning": false,
+          "vision": true
+        },
+        "gpt-4o-mini": {
+          "context_size": 128000,
+          "reasoning": false,
+          "vision": true
+        },
+        "o1": {
+          "context_size": 200000,
+          "reasoning": true,
+          "vision": false
+        },
+        "o3-mini": {
+          "context_size": 200000,
+          "reasoning": true,
+          "vision": false
+        }
+      }
+    },
+    "deepseek": {
+      "api_base": "https://api.deepseek.com",
+      "api_key": "sk-your-deepseek-key-here",
+      "models": {
+        "deepseek-chat": {
+          "context_size": 128000,
+          "reasoning": false,
+          "vision": false
+        },
+        "deepseek-reasoner": {
+          "context_size": 64000,
+          "reasoning": true,
+          "vision": false
+        }
+      }
+    }
+  },
+  "default": {
+    "backend": "openai",
+    "model": "gpt-4o"
+  }
+}
