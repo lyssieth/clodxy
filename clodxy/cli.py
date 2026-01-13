@@ -52,11 +52,6 @@ def _make_parser() -> argparse.ArgumentParser:
     help="List available backends and models",
   )
   parser.add_argument(
-    "--completions",
-    choices=["bash", "zsh", "fish"],
-    help="Print shell completion code (source this in your shell)",
-  )
-  parser.add_argument(
     "--backend",
     help="Backend to use (overrides config default)",
   )
@@ -113,36 +108,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   return args
 
 
-def print_completions(shell: str):
-  """Print shell completion code."""
-  if shell == "bash":
-    print("# bash completion for clodxy")
-    print("eval \"$(register-python-argcomplete clodxy)\"")
-  elif shell == "zsh":
-    print("# zsh completion for clodxy")
-    print("autoload -U compinit")
-    print("compinit -D")
-    print("eval \"$(register-python-argcomplete clodxy)\"")
-  elif shell == "fish":
-    # Generate fish completions that read config.json directly (works with uvx)
-    fish_code = '''# fish completion for clodxy
-set -l clodxy_config ~/.config/clodxy/config.json
-
-if test -f $clodxy_config
-  complete -c clodxy -f -a '(string match -r \'"[^\"]+\'(?=\\s*:\\s*\\{)' < $clodxy_config | string replace -a \'"\' \'\')
-  complete -c clodxy -l backend -f -a '(string match -r \'"[^\"]+\'(?=\\s*:\\s*\\{)' < $clodxy_config | string replace -a \'"\' \'\')
-
-  # Get models for current/default backend using python
-  complete -c clodxy -l model -f -a '(python3 -c \\
-    "import json; \\
-     c=json.load(open(\\"$HOME/.config/clodxy/config.json\\")); \\
-     b=c.get(\\"default\\",{}).get(\\"backend\\", list(c[\\"backends\\"].keys())[0]); \\
-     print(\\"\\\\n\\".join(c[\\"backends\\"][b][\\"models\\"].keys()))" \\
-  )'
-end'''
-    print(fish_code)
-
-
 def main():
   args = parse_args()
 
@@ -163,10 +128,6 @@ def main():
       print(f"clodxy {__version__}")
     except (ImportError, AttributeError):
       print("clodxy (version unknown)")
-    sys.exit(0)
-
-  if args.completions:
-    print_completions(args.completions)
     sys.exit(0)
 
   if args.list:
