@@ -52,6 +52,19 @@ def _make_parser() -> argparse.ArgumentParser:
     help="List available backends and models",
   )
   parser.add_argument(
+    "--completions",
+    choices=["bash", "zsh", "fish"],
+    help="Print shell completion code (source this in your shell)",
+  )
+  parser.add_argument(
+    "--backend",
+    help="Backend to use (overrides config default)",
+  )
+  parser.add_argument(
+    "--model",
+    help="Model to use (overrides config default)",
+  )
+  parser.add_argument(
     "--validate-config",
     action="store_true",
     help="Validate configuration file and exit",
@@ -100,6 +113,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   return args
 
 
+def print_completions(shell: str):
+  """Print shell completion code."""
+  if shell == "bash":
+    print("# bash completion for clodxy")
+    print("eval \"$(register-python-argcomplete clodxy)\"")
+  elif shell == "zsh":
+    print("# zsh completion for clodxy")
+    print("autoload -U compinit")
+    print("compinit -D")
+    print("eval \"$(register-python-argcomplete clodxy)\"")
+  elif shell == "fish":
+    # Generate fish completions that read config.json directly (works with uvx)
+    fish_code = '''# fish completion for clodxy
+set -l clodxy_config ~/.config/clodxy/config.json
+
+if test -f $clodxy_config
+  complete -c clodxy -f -a '(string match -r \'"[^\"]+\'(?=\\s*:\\s*\\{)' < $clodxy_config | string replace -a \'"\' \'\')
+  complete -c clodxy -l backend -f -a '(string match -r \'"[^\"]+\'(?=\\s*:\\s*\\{)' < $clodxy_config | string replace -a \'"\' \'\')
+
+  # Get models for current/default backend using python
+  complete -c clodxy -l model -f -a '(python3 -c \\
+    "import json; \\
+     c=json.load(open(\\"$HOME/.config/clodxy/config.json\\")); \\
+     b=c.get(\\"default\\",{}).get(\\"backend\\", list(c[\\"backends\\"].keys())[0]); \\
+     print(\\"\\\\n\\".join(c[\\"backends\\"][b][\\"models\\"].keys()))" \\
+  )'
+end'''
+    print(fish_code)
+
+
 def main():
   args = parse_args()
 
@@ -120,6 +163,10 @@ def main():
       print(f"clodxy {__version__}")
     except (ImportError, AttributeError):
       print("clodxy (version unknown)")
+    sys.exit(0)
+
+  if args.completions:
+    print_completions(args.completions)
     sys.exit(0)
 
   if args.list:
@@ -154,6 +201,33 @@ def main():
     print("  https://github.com/anthropics/claude-code")
     sys.exit(1)
 
+  # Load and validate config, apply CLI overrides
+  config = load_config()
+  backend_name = config.default.backend
+  model_name = config.default.model
+
+  if args.backend:
+    if args.backend not in config.backends:
+      available = ", ".join(config.backends.keys())
+      print(f"! Error: Backend '{args.backend}' not found.")
+      print(f"  Available: {available}")
+      sys.exit(1)
+    backend_name = args.backend
+
+  if args.model:
+    backend = config.backends[backend_name]
+    if args.model not in backend.models:
+      available = ", ".join(backend.models.keys())
+      print(f"! Error: Model '{args.model}' not found in backend '{backend_name}'.")
+      print(f"  Available: {available}")
+      sys.exit(1)
+    model_name = args.model
+
+  # Set up environment for both uvicorn and claude
+  proxy_env = os.environ.copy()
+  proxy_env["CLODXY_BACKEND"] = backend_name
+  proxy_env["CLODXY_MODEL"] = model_name
+
   # Start clodxy proxy in background
   print("| Starting clodxy proxy...")
   LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -162,6 +236,7 @@ def main():
     ["uvicorn", "clodxy.main:app", "--host", args.host, "--port", args.port],
     stdout=uvicorn_log,
     stderr=uvicorn_log,
+    env=proxy_env,
   )
 
   # Poll health endpoint until ready (max 10 seconds)
@@ -211,17 +286,15 @@ def main():
   if args.port != "0":
     base_url = f"http://{args.host}:{args.port}"
 
-  config = load_config()
   print(f"| Proxy running on {base_url}")
-  print(f"| Using {config.default.model} from {config.default.backend}")
+  print(f"| Using {model_name} from {backend_name}")
 
   # Set env vars for Claude Code
   env = os.environ.copy()
   env["ANTHROPIC_AUTH_TOKEN"] = "clodxy-local-key"
   env["ANTHROPIC_BASE_URL"] = base_url
-  env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = config.default.model
-  env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = config.default.model
-  env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = config.default.model
+  env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model_name
+  env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model_name
 
   print("| Environment configured")
   if args.claude_args:

@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -34,20 +35,29 @@ logger = logging.getLogger(__name__)
 
 config = load_config()
 
+# CLI overrides via environment variables
+cli_backend = os.environ.get("CLODXY_BACKEND")
+cli_model = os.environ.get("CLODXY_MODEL")
+
 backends = config.backends
 chosen = config.default
 
-if chosen.backend not in backends:
-  raise KeyError(
-    f"Backend '{chosen.backend}' not found in config. Available: {list(backends.keys())}"
-  )
+# Apply CLI overrides if present
+if cli_backend:
+  if cli_backend not in backends:
+    raise KeyError(
+      f"Backend '{cli_backend}' not found in config. Available: {list(backends.keys())}"
+    )
+  chosen.backend = cli_backend
 
 backend = backends[chosen.backend]
 
-if chosen.model not in backend.models:
-  raise KeyError(
-    f"Model '{chosen.model}' not found in backend '{chosen.backend}'. Available: {list(backend.models.keys())}"
-  )
+if cli_model:
+  if cli_model not in backend.models:
+    raise KeyError(
+      f"Model '{cli_model}' not found in backend '{chosen.backend}'. Available: {list(backend.models.keys())}"
+    )
+  chosen.model = cli_model
 
 api_base = backend.api_base
 api_key = backend.api_key or "not-needed"
