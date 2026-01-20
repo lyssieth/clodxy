@@ -3,8 +3,10 @@
 
 import argparse
 import httpx
+import json
 import os
 import re
+import readline
 import shutil
 import signal
 import subprocess
@@ -12,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from clodxy.config import load_config
+from clodxy.config import load_config, DEFAULT_CONFIG_PATH, Backend, Model, ChosenDefault, Config
 
 # Default proxy settings
 DEFAULT_HOST = "127.0.0.1"
@@ -75,11 +77,157 @@ def _make_parser() -> argparse.ArgumentParser:
     help=f"Proxy port (default: {DEFAULT_PORT}, 0 = auto-assign)",
   )
   parser.add_argument(
+    "--init",
+    action="store_true",
+    help="Initialize configuration file interactively",
+  )
+  parser.add_argument(
     "claude_args",
     nargs="*",
     help="Arguments to pass to claude (use '--' to separate clodxy args)",
   )
   return parser
+
+
+def _prompt(prompt: str, default: str | None = None, required: bool = True) -> str | None:
+  """Prompt user for input with optional default.
+
+  Args:
+    prompt: The prompt text to display
+    default: Default value if user presses Enter (None means no default)
+    required: If True, requires non-empty input unless default is provided
+
+  Returns:
+    The user input, or None if empty input allowed and user pressed Enter
+  """
+  if default is not None:
+    result = input(f"{prompt} [{default}]: ").strip()
+    return result if result else default
+
+  while True:
+    result = input(f"{prompt}: ").strip()
+    if result or not required:
+      return result or None
+
+
+def _prompt_bool(prompt: str, default: bool = False) -> bool:
+  """Prompt user for yes/no with optional default."""
+  default_str = "y" if default else "n"
+  while True:
+    result = input(f"{prompt} (y/n) [{default_str}]: ").strip().lower()
+    if not result:
+      return default
+    if result in ("y", "yes"):
+      return True
+    if result in ("n", "no"):
+      return False
+
+
+def _init_config() -> None:
+  """Initialize configuration file interactively."""
+  print("\n| Initializing clodxy configuration\n")
+
+  # Configure readline for better input handling
+  readline.parse_and_bind("tab: complete")
+
+  # Check if config exists
+  if DEFAULT_CONFIG_PATH.exists():
+    overwrite = _prompt_bool(
+      f"Config already exists at {DEFAULT_CONFIG_PATH}. Overwrite?", default=False
+    )
+    if not overwrite:
+      print("\n| Aborted")
+      sys.exit(0)
+
+  # Gather configuration
+  backend_name = _prompt("Backend name (e.g., openai, deepseek)")
+  api_base = _prompt("API base URL", "https://api.openai.com/v1")
+  api_key = _prompt("API key (optional, press Enter to skip)", "")
+  model_name = _prompt("Model name (e.g., gpt-4o)")
+  context_size = _prompt("Context size", "128000")
+
+  # Type assertions - these will never be None due to prompts
+  assert backend_name is not None
+  assert api_base is not None
+  assert api_key is not None
+  assert model_name is not None
+  assert context_size is not None
+
+  is_reasoning = _prompt_bool("Is this a reasoning model?", default=False)
+  supports_vision = _prompt_bool("Supports vision?", default=False)
+
+  # For reasoning models, ask about llama-server
+  skip_last_assistant = False
+  if is_reasoning:
+    is_llama_server = _prompt_bool("Are you running llama-server or similar?", default=False)
+    if is_llama_server:
+      skip_last_assistant = True
+
+  # Build config
+  config = Config(
+    backends={
+      backend_name: Backend(
+        api_base=api_base,
+        api_key=api_key if api_key else None,
+        skip_last_assistant_message=skip_last_assistant,
+        models={
+          model_name: Model(
+            context_size=int(context_size),
+            reasoning=is_reasoning,
+            vision=supports_vision,
+          )
+        },
+      )
+    },
+    default=ChosenDefault(backend=backend_name, model=model_name),
+  )
+
+  # Create config directory
+  config_dir = DEFAULT_CONFIG_PATH.parent
+  config_dir.mkdir(parents=True, exist_ok=True)
+
+  # Write config
+  with open(DEFAULT_CONFIG_PATH, "w") as f:
+    json.dump(
+      {
+        "backends": {
+          backend_name: {
+            "api_base": config.backends[backend_name].api_base,
+            **(
+              {"api_key": config.backends[backend_name].api_key}
+              if config.backends[backend_name].api_key
+              else {}
+            ),
+            "skip_last_assistant_message": config.backends[
+              backend_name
+            ].skip_last_assistant_message,
+            "models": {
+              model_name: {
+                "context_size": config.backends[backend_name].models[model_name].context_size,
+                "reasoning": config.backends[backend_name].models[model_name].reasoning,
+                "vision": config.backends[backend_name].models[model_name].vision,
+              }
+            },
+          }
+        },
+        "default": {"backend": config.default.backend, "model": config.default.model},
+      },
+      f,
+      indent=2,
+    )
+    f.write("\n")
+
+  print(f"\n| Configuration written to {DEFAULT_CONFIG_PATH}")
+
+  # Validate
+  try:
+    load_config()
+    print("| Configuration is valid!")
+  except (FileNotFoundError, ValueError) as e:
+    print(f"! Validation warning: {e}")
+
+  print("\n| You can now run: clodxy")
+  sys.exit(0)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -154,6 +302,9 @@ def main():
     except (FileNotFoundError, ValueError) as e:
       print(f"Config error: {e}")
       sys.exit(1)
+
+  if args.init:
+    _init_config()
 
   # Check if claude CLI is available
   if not shutil.which("claude"):
@@ -247,6 +398,9 @@ def main():
   if args.port != "0":
     base_url = f"http://{args.host}:{args.port}"
 
+  # base_url should always be set at this point
+  assert base_url is not None
+
   print(f"| Proxy running on {base_url}")
   print(f"| Using {model_name} from {backend_name}")
 
@@ -255,7 +409,8 @@ def main():
   env["ANTHROPIC_AUTH_TOKEN"] = "clodxy-local-key"
   env["ANTHROPIC_BASE_URL"] = base_url
   env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = model_name
-  env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model_name
+  env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model_name
+  env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model_name
 
   print("| Environment configured")
   if args.claude_args:
